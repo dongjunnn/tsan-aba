@@ -1,0 +1,30 @@
+name: Build Typst PDFs
+
+on: [push]
+
+permissions:
+  contents: write   # needed to create/update releases
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: typst-community/setup-typst@v3
+
+      - name: Compile every .typ file found
+        run: |
+          shopt -s globstar nullglob
+          for f in **/*.typ; do
+            typst compile "$f" "${f%.typ}.pdf"
+          done
+
+      - name: Publish PDF to a rolling "latest" release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: latest
+          allowUpdates: true
+          removeArtifacts: true
+          artifacts: "**/*.pdf"
+          body: "Auto-built from commit ${{ github.sha }}"
