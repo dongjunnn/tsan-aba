@@ -1,0 +1,75 @@
+diff --git a/compiler-rt/lib/tsan/rtl/tsan_defs.h b/compiler-rt/lib/tsan/rtl/tsan_defs.h
+index 270d441dc90b..a97eead80017 100644
+--- a/compiler-rt/lib/tsan/rtl/tsan_defs.h
++++ b/compiler-rt/lib/tsan/rtl/tsan_defs.h
+@@ -181,8 +181,9 @@ enum : AccessType {
+ 
+ // Descriptor of user's memory block.
+ struct MBlock {
+-  u64  siz : 48;
++  u64  siz : 40;
+   u64  tag : 16;
++  u64  alloc_epoch : 8;
+   StackID stk;
+   Tid tid;
+ };
+diff --git a/compiler-rt/lib/tsan/rtl/tsan_mman.cpp b/compiler-rt/lib/tsan/rtl/tsan_mman.cpp
+index caacb3675825..4e9cc6b9a18e 100644
+--- a/compiler-rt/lib/tsan/rtl/tsan_mman.cpp
++++ b/compiler-rt/lib/tsan/rtl/tsan_mman.cpp
+@@ -23,8 +23,11 @@
+ #include "tsan_report.h"
+ #include "tsan_rtl.h"
+ 
++
+ namespace __tsan {
+ 
++static atomic_uint64_t g_aba_epoch = {1};
++
+ struct MapUnmapCallback {
+   void OnMap(uptr p, uptr size) const { }
+   void OnMapSecondary(uptr p, uptr size, uptr user_begin,
+@@ -278,6 +281,9 @@ void OnUserAlloc(ThreadState *thr, uptr pc, uptr p, uptr sz, bool write) {
+   // which iterates over and resets all sync objects,
+   // but it is fine to create new MBlocks in this context.
+   ctx->metamap.AllocBlock(thr, pc, p, sz);
++  if (MBlock *b = ctx->metamap.GetBlock(p)) {
++    b->alloc_epoch = atomic_fetch_add(&g_aba_epoch, 1, memory_order_relaxed) & 0xFF;
++  }
+   // If this runs before thread initialization/after finalization
+   // and we don't have trace initialized, we can't imitate writes.
+   // In such case just reset the shadow range, it is fine since
+@@ -298,6 +304,9 @@ void OnUserFree(ThreadState *thr, uptr pc, uptr p, bool write) {
+     return;
+   }
+   SlotLocker locker(thr);
++  // ABA detection: zero the epoch so a recycled chunk gets a fresh stamp.
++  if (MBlock *b = ctx->metamap.GetBlock(p))
++    b->alloc_epoch = 0;
+   uptr sz = ctx->metamap.FreeBlock(thr->proc(), p, true);
+   DPrintf("#%d: free(0x%zx, %zu)\n", thr->tid, p, sz);
+   if (write && thr->ignore_reads_and_writes == 0)
+@@ -507,4 +516,11 @@ void __tsan_on_thread_idle() {
+   internal_allocator()->SwallowCache(&thr->proc()->internal_alloc_cache);
+   ctx->metamap.OnProcIdle(thr->proc());
+ }
++
++u8 GetAllocEpoch(uptr p) {
++  if (MBlock *b = ctx->metamap.GetBlock(p))
++    return b->alloc_epoch;
++  return 0;
++}
++
+ }  // extern "C"
+diff --git a/compiler-rt/lib/tsan/rtl/tsan_mman.h b/compiler-rt/lib/tsan/rtl/tsan_mman.h
+index f01bbc4d1571..a9b5ab2ee6f9 100644
+--- a/compiler-rt/lib/tsan/rtl/tsan_mman.h
++++ b/compiler-rt/lib/tsan/rtl/tsan_mman.h
+@@ -76,5 +76,7 @@ void DestroyAndFree(T *&p) {
+   Free(p);
+ }
+ 
++u8 GetAllocEpoch(uptr p);
++
+ }  // namespace __tsan
+ #endif  // TSAN_MMAN_H
