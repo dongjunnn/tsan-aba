@@ -197,6 +197,10 @@ Layer A heap detection only:
 
 == Regression Tests
 
+I will start with simple tests. They will involve just pointers to demonstrate the different scenarios with ABA. This will be done before moving onto more complex concurrent data structures. 
+
+
+
 Each test is a self-contained C++ program compiled under three configurations and
 verified by a shell script that checks stderr for the presence or absence of the
 ABA warning string. The script exits non-zero if any test produces unexpected output,
